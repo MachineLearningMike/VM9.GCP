@@ -23,7 +23,7 @@ def ShowSingle(title, series):
     ax = fig.add_subplot(111)
     ax.set_title(title)
     for line in series:
-        ax.plot(line[0], label = line[1], color=line[2])
+        ax.plot(line[0], label = line[1], color=line[2], lw=0.5)
     ax.legend()
     plt.show()
 
@@ -40,9 +40,9 @@ def PoltNormalized(title, series, color = 'manual'):
 
     for line in series:
         if color == 'manual':
-            ax.plot(line[0], label = line[1], color=line[2])
+            ax.plot(line[0], label = line[1], color=line[2], lw=0.5)
         else:
-            ax.plot(line[0], label = line[1])
+            ax.plot(line[0], label = line[1], lw=0.5)
 
     ax.legend(loc = 'upper left')
     plt.show()
@@ -187,6 +187,32 @@ def intervalToMilliseconds(interval):
     return ms
 
 
+def get_time_features_core(timestamps_abs, sigma):
+    sigma = np.power(2.0, -0.2)
+    hourly = np.sin( 2 * np.pi / (60*60) * timestamps_abs ) / sigma
+    daily = np.sin( 2 * np.pi / (60*60*24) * timestamps_abs ) / sigma
+    weekly = np.sin( 2 * np.pi / (60*60*24*7) * timestamps_abs ) / sigma
+    yearly = np.sin( 2 * np.pi / (60*60*24*365) * timestamps_abs ) / sigma
+    tenyearly = np.sin( 2 * np.pi / (60*60*24*365*10) * timestamps_abs ) / sigma    # Let the model absorb non-cyclic time features.
+    Times = np.stack([hourly, daily, weekly, yearly], axis=1)
+    return Times   
+
+
+def get_joint_time_features_2(CandleFile, nCandles, datatype):
+    start = datetime( 2000+int(CandleFile[0:2]), int(CandleFile[3:5]), int(CandleFile[6:8]), int(CandleFile[9:11]), int(CandleFile[12:14]) )
+    start_ts = round(datetime.timestamp(start))
+    interval = CandleFile[ CandleFile.find('-', len(CandleFile) - 4) + 1 : ]
+    interval_s = round(intervalToMilliseconds(interval) / 1000)
+    timestamps_abs = np.array( range(start_ts, start_ts + nCandles * interval_s, interval_s), dtype=np.int64) # must be 64
+    assert timestamps_abs.shape[0] == nCandles
+
+    sigma = np.power(2.0, -0.2)
+    Times = get_time_features_core(timestamps_abs, sigma)
+
+    Times = Times.astype(datatype)
+    return start_ts, interval_s, timestamps_abs, Times
+
+
 def get_time_features_2(CandleFile, nCandles, datatype):
     start = datetime( 2000+int(CandleFile[0:2]), int(CandleFile[3:5]), int(CandleFile[6:8]), int(CandleFile[9:11]), int(CandleFile[12:14]) )
     start_ts = round(datetime.timestamp(start))
@@ -196,15 +222,44 @@ def get_time_features_2(CandleFile, nCandles, datatype):
     assert timestamps_abs.shape[0] == nCandles
 
     sigma = np.power(2.0, -0.2)
-    hourly = np.sin( 2 * np.pi / (60*60) * timestamps_abs ) / sigma
-    daily = np.sin( 2 * np.pi / (60*60*24) * timestamps_abs ) / sigma
-    weekly = np.sin( 2 * np.pi / (60*60*24*7) * timestamps_abs ) / sigma
-    yearly = np.sin( 2 * np.pi / (60*60*24*365) * timestamps_abs ) / sigma
-    tenyearly = np.sin( 2 * np.pi / (60*60*24*365*10) * timestamps_abs ) / sigma    # Let the model absorb non-cyclic time features.
-    Times = np.stack([hourly, daily, weekly, yearly], axis=1)
+    sigma = np.power(2.0, -0.2)
+    Times = get_time_features_core(timestamps_abs, sigma)
+
 
     Times = Times.astype(datatype)
     return start_ts, interval_s, timestamps_abs, Times
+
+
+def get_time_features_3(CandleFile, nStart, nEnd, datatype):    # nEnd: exclusive
+    start = datetime( 2000+int(CandleFile[0:2]), int(CandleFile[3:5]), int(CandleFile[6:8]), int(CandleFile[9:11]), int(CandleFile[12:14]) )
+    start_ts = round(datetime.timestamp(start))
+    interval = CandleFile[ CandleFile.find('-', len(CandleFile) - 4) + 1 : ]
+    interval_s = round(intervalToMilliseconds(interval) / 1000)
+    timestamps_abs = np.array( range(start_ts + nStart * interval_s, start_ts + nEnd * interval_s, interval_s), dtype=np.int64) # must be 64
+    assert timestamps_abs.shape[0] == nEnd - nStart
+
+    sigma = np.power(2.0, -0.2)
+    sigma = np.power(2.0, -0.2)
+    Times = get_time_features_core(timestamps_abs, sigma)
+
+
+    Times = Times.astype(datatype)
+    return start_ts, interval_s, timestamps_abs, Times
+
+
+def get_standalone_time_features(CandleFile, CandleFile3, nCandles3, datatype):
+    start_ts, interval_s, _, _ = get_joint_time_features_2(CandleFile, 0, datatype)
+    start_ts3, _, _, _ = get_joint_time_features_2(CandleFile3, 0, datatype)
+    assert start_ts <= start_ts3
+    nCandles = round( (start_ts3 - start_ts) / interval_s ) + nCandles3
+    _, _, timestamps_abs, Times = get_joint_time_features_2(CandleFile, nCandles, datatype)
+
+    timestamps_abs3 = timestamps_abs[round((start_ts3 - start_ts) / interval_s):]
+    assert timestamps_abs3.shape[0] == nCandles3
+    Times3 = Times[round((start_ts3 - start_ts) / interval_s):]
+    assert Times3.shape[0] == nCandles3
+
+    return start_ts3, interval_s, timestamps_abs3, Times3
 
 
 #==================== Define 'Get_eFree' ====================
@@ -329,6 +384,37 @@ def get_eventfree_data(
     CandleMarks= CandleMarks[-data_length:]
 
     return Candles, CandleMarks, Times
+
+
+def get_eventfree_data_2(
+        Candles, CandleMarks, Times,
+        smallSigma, largeSigma, all_market_names, chosen_market_names, 
+        all_field_names, chosen_field_names,
+        eFreeNoLog, eFreeNoPlot, volume_volatility
+    ):
+    volume_volatility = 3 if 'BaseVolume' in all_field_names else 1
+    assert volume_volatility >= 1
+    
+    event_free_data_loss = \
+    3 * ( (volume_volatility if 'BaseVolume' in all_field_names else 1) * smallSigma + largeSigma )
+
+    data_length = Candles.shape[0]
+    for market in range(Candles.shape[1]):
+        for field in range(Candles.shape[2]):
+            thisSigma = smallSigma
+            if all_field_names[field] == 'BaseVolume': thisSigma = smallSigma * volume_volatility
+            P, maP, logP, log_maP, event, eventFree = \
+            get_eFree_with_plot(all_market_names[market], all_field_names[field], Candles[:, market, field], 
+                                thisSigma, largeSigma, noPlot=eFreeNoPlot, noLog=eFreeNoLog)
+            data_length = min(data_length, eventFree.shape[0])
+            eventFree = eventFree.astype(Candles.dtype)
+            Candles[-eventFree.shape[0]:, market, field] = eventFree
+
+    Candles = Candles[-data_length:]
+    Times = Times[-data_length:]
+    CandleMarks= CandleMarks[-data_length:]
+
+    return Candles, CandleMarks, Times, events
 
 
 def get_timepoint_size(indices):
@@ -616,6 +702,18 @@ def standardize_2(Candles, logarithmic=False):
     return Candles, Standard
 
 
+def standardize_observation(Candles3, Standard):    # Not completed.
+    for market in range(Candles3.shape[1]):
+        for field in range(Candles3.shape[2]):
+            m, f, mu, sigma = Standard[market, field]
+            assert m == market
+            assert f == field
+
+            nzPs = np.array(range(Candles3.shape[0]))
+            Candles3[nzPs, market, field] = ( Candles3[nzPs, market, field] - mu ) / (sigma + 1e-9)
+
+    return Candles3
+
 
 def get_sample_anchors_3(Data, Nx, Ny, Ns, seed=523):
     sample_anchors = np.array(range(0, Data.shape[0]-Nx-Ny-(Ns-1), Ns), dtype=np.int32) # -(Ns-1): for right-shifting. max Ns-1
@@ -661,6 +759,35 @@ def get_joint_data(
 
     return JointCandles, JointMarks, sample_anchors_t, sample_anchors_v
 
+
+def get_joint_data_2(
+        Candles, CandleMarks, timestamps_abs, sample_anchors_t, sample_anchors_v,
+        Candles2, CandleMarks2, timestamps_abs2, sample_anchors_t2, sample_anchors_v2,
+        interval_s
+    ):
+    assert timestamps_abs2[0] - timestamps_abs[-1] == interval_s
+
+    JointCandles = np.concatenate((Candles, Candles2), axis=0)
+    JointMarks = np.concatenate((CandleMarks, CandleMarks2), axis=0)
+    print(JointCandles.shape)
+
+    max_anchor = max(np.max(sample_anchors_t), np.max(sample_anchors_v))
+    print(max_anchor)
+    sample_anchors_t2 = sample_anchors_t2 + max_anchor
+    sample_anchors_v2 = sample_anchors_v2 + max_anchor
+    print(sample_anchors_t2[:5])
+
+    sample_anchors_t = np.concatenate( (sample_anchors_t, sample_anchors_t2) )
+    sample_anchors_v = np.concatenate( (sample_anchors_v, sample_anchors_v2) )
+    print(sample_anchors_t.shape, sample_anchors_v.shape)
+
+    for _ in range(10):
+        permute = np.random.permutation(sample_anchors_t.shape[0])
+        sample_anchors = sample_anchors_t[permute]
+        permute = np.random.permutation(sample_anchors_v.shape[0])
+        sample_anchors = sample_anchors_v[permute]
+
+    return JointCandles, JointMarks, sample_anchors_t, sample_anchors_v
 
 #==================== Define 'divide_to_multiple_csv_files' ====================
 
@@ -770,28 +897,31 @@ def csv_reader_to_dataset(filenames, nx, size_x, ny, size_y, time_x, time_y, siz
     return dataset
 
 
-def get_datasets_3(
-    Candles, Time_into_X, Time_into_Y, Times, 
-    sample_anchores_t, sample_anchores_v,
-    Nx, x_indices, Ny, y_indices, size_time, target_markets, shift,
-    BatchSize, shuffle_batch, shuffle=True
-):
-    
+def get_dxdy(x_indices, y_indices, size_time, Time_into_X, Time_into_Y):
     size_x = get_timepoint_size(x_indices)
     size_y = get_timepoint_size(y_indices) # time_into_x
-
     dx = size_x + (size_time if Time_into_X else 0)
     dx = dx + dx % 2
     dy = size_y + (size_time if Time_into_X else 0)     # not Time_into_Y
     dy = dy + dy % 2
     assert dx == dy
+    return dx, dy
+
+
+def get_datasets_3(
+    Candles, Time_into_X, Time_into_Y, Times, 
+    sample_anchores_t, sample_anchores_v,
+    Nx, x_indices, Ny, y_indices, size_time, target_markets, shift,
+    BatchSize, shuffle_batch, shuffle=True, cache=True
+):   
+    dx, dy = get_dxdy(x_indices, y_indices, size_time, Time_into_X, Time_into_Y)
 
     non_target_markets_relative = [ y_indices[0].index(i) for i in y_indices[0] if i not in target_markets ]
     nFeaturesPerMarket = len(y_indices[1])
     all_ntmr = []
     for ntmr in non_target_markets_relative:
         all_ntmr = all_ntmr + list(range(ntmr* nFeaturesPerMarket, (ntmr+1) * nFeaturesPerMarket, 1))
-    non_target_features_relative = tuple(all_ntmr)
+    non_target_markets_relative = tuple(all_ntmr)
 
     def anchor_to_sample(anchor): # This function is the bottle-neck of training speed.
         anchor = anchor + shift
@@ -802,6 +932,9 @@ def get_datasets_3(
             x = np.concatenate((x, np.reshape(Times[anchor: anchor + Nx], (Nx, -1))), axis=1) # concat(x, x_time)
 
         y = np.reshape(Candles[anchor + Nx: anchor + Nx + Ny][:, y_indices[0]][:, :, y_indices[1]], (Ny, -1))
+        
+        # y and y_shift must be subject to the same rule.
+        y[:, non_target_markets_relative] = 0.0
 
         if Time_into_X is True:
             assert Times is not None
@@ -816,7 +949,8 @@ def get_datasets_3(
             x = np.pad(x, [[0,0], [0,1]], constant_values=0) # (0 pre-pad: Start, 0 post-pad: End) on axis 0. (0 pre-pad, 1 post-pad) on axis 1.
             y = np.pad(y, [[0,0], [0,1]], constant_values=0)
 
-        y[:, non_target_features_relative] = 0.0 # Start/Stop = NoInfo = 0.0
+        assert dx == x.shape[1]
+        assert dy == y.shape[1]
 
         return x, y[:-1], y[1:]
         # so M(x, [y[0]]) -> y[1], M(x, [y[0], y[1]]) -> y[2], ..., M(x, [y[0], ..., y[-2]]) -> y[-1]
@@ -839,8 +973,10 @@ def get_datasets_3(
             dataset = dataset.shuffle(BatchSize * shuffle_batch)
         
         dataset = dataset.batch(BatchSize, drop_remainder=False) \
-        .prefetch(tf.data.AUTOTUNE) \
-        .cache()
+        .prefetch(tf.data.AUTOTUNE)
+
+        if cache:
+            dataset = dataset.cache()
 
         return dataset
 
@@ -853,7 +989,7 @@ def get_datasets_3(
 def get_datasets_no_end(
     Candles, Time_into_X, Time_into_Y, Times, 
     sample_anchores_t, sample_anchores_v,
-    Nx, x_indices, Ny, y_indices, size_time, target_markets, learning_mask, shift,
+    Nx, x_indices, Ny, y_indices, size_time, target_markets, target_field_mask, shift,
     BatchSize, shuffle_batch, shuffle=True
 ):
     
@@ -871,8 +1007,8 @@ def get_datasets_no_end(
     all_ntmr = []
     for ntmr in non_target_markets_relative:
         all_ntmr = all_ntmr + list(range(ntmr* nFeaturesPerMarket, (ntmr+1) * nFeaturesPerMarket, 1))
-    non_target_features_relative = tuple(all_ntmr)
-    learning_mask = np.tile( np.array(learning_mask, dtype=Candles.dtype), len(y_indices[0]) )
+    non_target_markets_relative = tuple(all_ntmr)
+    target_field_mask = np.tile( np.array(target_field_mask, dtype=Candles.dtype), len(y_indices[0]) )
 
     def anchor_to_sample(anchor): # This function is the bottle-neck of training speed.
         anchor = anchor + shift
@@ -884,7 +1020,9 @@ def get_datasets_no_end(
 
         y = np.reshape(Candles[anchor + Nx: anchor + Nx + Ny][:, y_indices[0]][:, :, y_indices[1]], (Ny, -1))
 
-        y = y * learning_mask
+        # y and y_shift must be subject to the same rule.
+        y[:, non_target_markets_relative] = 0.0
+        y = y * target_field_mask
 
         if Time_into_X is True:
             assert Times is not None
@@ -909,6 +1047,8 @@ def get_datasets_no_end(
             x = np.pad(x, [[0,0], [0,1]], constant_values=0) # (0 pre-pad: Start, 0 post-pad: End) on axis 0. (0 pre-pad, 1 post-pad) on axis 1.
             y = np.pad(y, [[0,0], [0,1]], constant_values=0)
 
+        # So, Y_true[-1] does not participate in y[:-1]. And End no in y[1:]
+        # So, if Ny == 1, then y[:-1] has Start only, and y[1:] has Y_true[0] only.
         return x, y[:-1], y[1:]
         # so M(x, [y[0]]) -> y[1], M(x, [y[0], y[1]]) -> y[2], ..., M(x, [y[0], ..., y[-2]]) -> y[-1]
         # where y[0] = Start, y[-1] = End.
@@ -939,6 +1079,90 @@ def get_datasets_no_end(
     ds_valid = refine_dataset(sample_anchores_v)
 
     return ds_train, ds_valid, dx, dy
+
+
+def get_datasets_no_end_single_point(
+    Candles, Time_into_X, Time_into_Y, Times, 
+    sample_anchores_t, sample_anchores_v,
+    Nx, x_indices, Ny, y_indices, size_time, target_markets, target_field_mask, shift,
+    BatchSize, shuffle_batch, shuffle=True, cache = True
+): 
+    dx, dy = get_dxdy(x_indices, y_indices, size_time, Time_into_X, Time_into_Y)
+
+    non_target_markets_relative = [ y_indices[0].index(i) for i in y_indices[0] if i not in target_markets ]
+    nFeaturesPerMarket = len(y_indices[1])
+    all_ntmr = []
+    for ntmr in non_target_markets_relative:
+        all_ntmr = all_ntmr + list(range(ntmr* nFeaturesPerMarket, (ntmr+1) * nFeaturesPerMarket, 1))
+    non_target_markets_relative = tuple(all_ntmr)
+    target_field_mask = np.tile( np.array(target_field_mask, dtype=Candles.dtype), len(y_indices[0]) )
+
+    def anchor_to_sample(anchor): # This function is the bottle-neck of training speed.
+        anchor = anchor + shift
+
+        x = np.reshape(Candles[anchor: anchor + Nx][:, x_indices[0]][:, :, x_indices[1]], (Nx, -1))
+        if Time_into_X is True:
+            assert Times is not None
+            x = np.concatenate((x, np.reshape(Times[anchor: anchor + Nx], (Nx, -1))), axis=1) # concat(x, x_time)
+
+        y = np.reshape(Candles[anchor + Nx + Ny -1: anchor + Nx + Ny][:, y_indices[0]][:, :, y_indices[1]], (1, -1))
+        # y = np.reshape(Candles[anchor + Nx: anchor + Nx + Ny][:, y_indices[0]][:, :, y_indices[1]], (Ny, -1))
+        
+        # y and y_shift must be subject to the same rule.
+        y[:, non_target_markets_relative] = 0.0
+        y = y * target_field_mask #--------------------------------------------
+
+        if Time_into_X is True:
+            assert Times is not None
+            # single point of time
+            y_time = np.reshape(Times[anchor + Nx + Ny -1: anchor + Nx + Ny], (1, -1))
+            # y_time = np.reshape(Times[anchor + Nx: anchor + Nx + Ny], (Ny, -1))
+            if Time_into_Y is not True: y_time[:] = 0.0
+            y = np.concatenate((y, y_time), axis=1)
+
+        x = np.pad(x, [[1,0], [0,0]], constant_values=0) #-------------------------------------
+        y = np.pad(y, [[1,0], [0,0]], constant_values=0) #-------------------------------------
+
+        if x.shape[-1] % 2 != 0:
+            x = np.pad(x, [[0,0], [0,1]], constant_values=0) # (0 pre-pad: Start, 0 post-pad: End) on axis 0. (0 pre-pad, 1 post-pad) on axis 1.
+            y = np.pad(y, [[0,0], [0,1]], constant_values=0)
+
+        assert dx == x.shape[1]
+        assert dy == y.shape[1]
+
+        return x, y[:-1], y[1:]
+        # so M(x, [y[0]]) -> y[1], M(x, [y[0], y[1]]) -> y[2], ..., M(x, [y[0], ..., y[-2]]) -> y[-1]
+        # where y[0] = Start, y[-1] = End.
+
+    def refine_dataset(sample_anchores):
+        dataset = tf.data.Dataset.from_tensor_slices(sample_anchores)
+        dataset = dataset.map(
+            lambda anchor: tf.numpy_function(
+                # All are evaluated to numpy things. E.g. anchor is evaluated to numpy.
+                anchor_to_sample,
+                inp = [anchor],
+                Tout = [Candles.dtype, Candles.dtype, Candles.dtype]
+            ),
+            num_parallel_calls=tf.data.AUTOTUNE
+        ) \
+        .map(lambda x, y, z: ((x, y), z))
+
+        if shuffle is True:
+            dataset = dataset.shuffle(BatchSize * shuffle_batch)
+        
+        dataset = dataset.batch(BatchSize, drop_remainder=False) \
+        .prefetch(tf.data.AUTOTUNE)
+
+        if cache:
+            dataset = dataset.cache()
+
+        return dataset
+
+    ds_train = refine_dataset(sample_anchores_t)
+    ds_valid = refine_dataset(sample_anchores_v)
+
+    return ds_train, ds_valid, dx, dy, non_target_markets_relative, target_field_mask
+
 
 class DecayingLearningRate(tf.keras.optimizers.schedules.LearningRateSchedule):
   def __init__(self, initial, rate, skip=0):
@@ -1073,19 +1297,39 @@ class MaskedHuber_Metric(tf.keras.metrics.Metric):
 
 #========================================= MaskedMAE
 
+# def MaskedMAE_Core(y_true, y_pred, sample_weight=None):
+#         # y_true, y_pred: (batch, sequence, depth)
+#         raw_loss = tf.abs(y_true - y_pred)
+#         mask = tf.cast(y_true != 0, dtype=y_pred.dtype, name='mask')   # no need for 0.0
+#         masked_loss = tf.multiply(raw_loss, mask, name='masked_loss')
+#         rs_masked_loss = tf.math.reduce_sum(masked_loss, axis=-1, name='rs_masked_loss')  # depth axis is reduced
+#         rs_mask = tf.math.reduce_sum(mask, axis=-1, name='rs_mask')  # depth axis is reduced
+#         loss = tf.divide(rs_masked_loss, rs_mask + 1e-9, name='loss')
+#         if sample_weight is not None:
+#             sample_weight = tf.cast(sample_weight, y_pred.dtype)
+#             sample_weight = tf.broadcast_to(sample_weight, loss.shape)
+#             loss = tf.multiply(loss, sample_weight)
+#         return loss
+
+
 def MaskedMAE_Core(y_true, y_pred, sample_weight=None):
-        # y_true, y_pred: (batch, sequence, depth)
-        raw_loss = tf.abs(y_true - y_pred)
-        mask = tf.cast(y_true != 0, dtype=y_pred.dtype, name='mask')   # no need for 0.0
-        masked_loss = tf.multiply(raw_loss, mask, name='masked_loss')
-        rs_masked_loss = tf.reduce_sum(masked_loss, axis=-1, name='rs_masked_loss')  # depth axis is reduced
-        rs_mask = tf.reduce_sum(mask, axis=-1, name='rs_mask')  # depth axis is reduced
-        loss = tf.divide(rs_masked_loss, rs_mask + 1e-9, name='loss')
-        if sample_weight is not None:
-            sample_weight = tf.cast(sample_weight, y_pred.dtype)
-            sample_weight = tf.broadcast_to(sample_weight, loss.shape)
-            loss = tf.multiply(loss, sample_weight)
-        return loss
+    # y_true, y_pred: (batch, sequence, depth)
+    raw_loss = tf.abs(y_true - y_pred)
+    mask = tf.cast(y_true != 0, dtype=y_pred.dtype, name='mask')   # no need for 0.0
+    masked_loss = tf.multiply(raw_loss, mask, name='masked_loss')
+    N = tf.ones_like(y_true, dtype=y_true.dtype)
+    N = tf.reduce_sum(N, axis=-1)
+    N = tf.stack([N], axis=2)
+    N1 = tf.math.reduce_sum(mask, axis=-1, name='rs_mask')  # depth axis is reduced
+    N1 = tf.stack( [N1], axis=2)
+    # loss = loss * N   # N, or reduce_sum(f(y_pred)), is the source of nan loss. y_true.shape[-1] is of NoneType.
+    NN1 = N / (N1 + 1e-9)
+    loss = masked_loss * NN1
+    if sample_weight is not None:
+        sample_weight = tf.cast(sample_weight, y_pred.dtype)
+        sample_weight = tf.broadcast_to(sample_weight, loss.shape)
+        loss = tf.multiply(loss, sample_weight)
+    return loss
 
 
 class MaskedMAE(tf.keras.losses.Loss):
